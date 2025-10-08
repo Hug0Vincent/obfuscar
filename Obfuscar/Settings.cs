@@ -56,6 +56,10 @@ namespace Obfuscar
             AnalyzeXaml = XmlConvert.ToBoolean(vars.GetValue("AnalyzeXaml", "false"));
             SkipGenerated = XmlConvert.ToBoolean(vars.GetValue("SkipGenerated", "false"));
             CustomChars = vars.GetValue("CustomChars", "");
+
+            WordListFilePath = Environment.ExpandEnvironmentVariables(vars.GetValue("WordListFilePath", ""));
+            TypeWordListFilePath = Environment.ExpandEnvironmentVariables(vars.GetValue("TypeWordListFilePath", ""));
+            NamespaceWordListFilePath = Environment.ExpandEnvironmentVariables(vars.GetValue("NamespaceWordListFilePath", ""));
         }
 
         public bool RegenerateDebugInfo { get; }
@@ -99,5 +103,11 @@ namespace Obfuscar
         public bool SkipGenerated { get; }
 
         public string CustomChars { get; }
+
+        public string WordListFilePath { get; }
+
+        public string TypeWordListFilePath { get; }
+
+        public string NamespaceWordListFilePath { get; }
     }
 }

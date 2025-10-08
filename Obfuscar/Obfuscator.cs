@@ -42,6 +42,7 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 using Obfuscar.Helpers;
+using System.Security.Cryptography;
 
 namespace Obfuscar
 {
@@ -89,6 +90,9 @@ namespace Obfuscar
         {
             // The SemanticAttributes of MethodDefinitions have to be loaded before any fields,properties or events are removed
             LoadMethodSemantics();
+
+            LoggerService.Logger.LogInformation("Injecting TeaEncryptor...\n");
+            InjectTeaEncryptor();
 
             LoggerService.Logger.LogInformation("Hiding strings...\n");
             HideStrings();
@@ -140,7 +144,7 @@ namespace Obfuscar
 
             // make sure everything looks good
             Project.CheckSettings();
-            NameMaker.DetermineChars(Project.Settings);
+            NameMaker.DetermineNames(Project.Settings);
 
             LoggerService.Logger.LogInformation("Loading assemblies...");
             LoggerService.Logger.LogInformation("Extra framework folders: ");
@@ -552,7 +556,7 @@ namespace Obfuscar
                     if (type.FullName == "<Module>")
                         continue;
 
-                    if (type.FullName.IndexOf("<PrivateImplementationDetails>{", StringComparison.Ordinal) >= 0)
+                    if (type.FullName.IndexOf("<FileSystemGlobbing>{", StringComparison.Ordinal) >= 0)
                         continue;
 
                     TypeKey oldTypeKey = new TypeKey(type);
@@ -1471,6 +1475,24 @@ namespace Obfuscar
             }
         }
 
+        public void InjectTeaEncryptor()
+        {
+            // Load the current executing assembly (where TeaEncryptor is defined)
+            var currentAssembly = AssemblyDefinition.ReadAssembly(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            var currentModule = currentAssembly.MainModule;
+
+            // Locate the TeaEncryptor type
+            var teaEncryptorType = currentModule.Types.FirstOrDefault(t => t.FullName == "Obfuscar.TeaEncryptor");
+            if (teaEncryptorType == null)
+                throw new InvalidOperationException("TeaEncryptor type not found in the current assembly.");
+
+            foreach (var info in Project.AssemblyList)
+            {
+                MonoCecilExtensions.AddType(info.Definition, teaEncryptorType, false);
+                info.Definition.UpdateFieldsPropertiesAndMethods(false);
+            }
+        }
+
         private class StringSqueeze
         {
             /// <summary>
@@ -1506,11 +1528,15 @@ namespace Obfuscar
 
             private TypeReference SystemIntTypeReference { get; set; }
 
+            private TypeReference SystemUIntTypeReference { get; set; }
+
             private TypeReference SystemObjectTypeReference { get; set; }
 
             private TypeReference SystemValueTypeTypeReference { get; set; }
 
             private MethodReference InitializeArrayMethod { get; set; }
+
+            private MethodReference DecryptMethod { get; set; }
 
             private TypeDefinition EncodingTypeDefinition { get; set; }
 
@@ -1543,6 +1569,7 @@ namespace Obfuscar
                 SystemStringTypeReference = library.MainModule.TypeSystem.String;
                 SystemByteTypeReference = library.MainModule.TypeSystem.Byte;
                 SystemIntTypeReference = library.MainModule.TypeSystem.Int32;
+                SystemUIntTypeReference = library.MainModule.TypeSystem.UInt32;
                 SystemObjectTypeReference = library.MainModule.TypeSystem.Object;
                 SystemValueTypeTypeReference = new TypeReference("System", "ValueType", library.MainModule,
                     library.MainModule.TypeSystem.CoreLibrary);
@@ -1560,6 +1587,60 @@ namespace Obfuscar
                     library.MainModule, library.MainModule.TypeSystem.CoreLibrary).Resolve();
                 InitializeArrayMethod = library.MainModule.ImportReference(
                     runtimeHelpers.Methods.FirstOrDefault(method => method.Name == "InitializeArray"));
+
+                var teaEncryptorType = library.MainModule.ImportReference(typeof(TeaEncryptor)).Resolve();
+                DecryptMethod = library.MainModule.ImportReference(
+                    teaEncryptorType.Methods.FirstOrDefault(method => method.Name == "Decrypt"));
+
+                GenerateCryptoKey();
+            }
+
+            private void GenerateCryptoKey()
+            {
+                // Locate the TeaEncryptor type
+                var teaEncryptorType = _library.MainModule.Types.FirstOrDefault(t => t.FullName == "Obfuscar.TeaEncryptor");
+                if (teaEncryptorType == null)
+                    throw new InvalidOperationException("TeaEncryptor type not found in the current assembly.");
+                
+                var method = teaEncryptorType.Methods.First(m => m.Name == "InitKey");
+
+                method.Body.Instructions.Clear();
+                var il = method.Body.GetILProcessor();
+
+                const int ArraySize = 4;
+                uint[] keyValues = new uint[ArraySize];
+
+                // Fill the array with random values
+                using (RandomNumberGenerator rng = RandomNumberGenerator.Create())
+                {
+                    byte[] randomBytes = new byte[sizeof(uint)];
+                    for (int i = 0; i < ArraySize; i++)
+                    {
+                        rng.GetBytes(randomBytes);
+                        keyValues[i] = BitConverter.ToUInt32(randomBytes, 0);
+                    }
+                }
+
+                // set key for current encryptor
+                TeaEncryptor.Key = keyValues;
+
+                // Create the array
+                il.Emit(OpCodes.Ldc_I4, keyValues.Length);
+                il.Emit(OpCodes.Newarr, SystemUIntTypeReference);
+
+                // Fill array
+                for (int i = 0; i < keyValues.Length; i++)
+                {
+                    il.Emit(OpCodes.Dup);                // duplicate array ref
+                    il.Emit(OpCodes.Ldc_I4, i);          // index
+                    il.Emit(OpCodes.Ldc_I4, (int)keyValues[i]);  // value
+                    il.Emit(OpCodes.Stelem_I4);          // store
+                }
+
+                // Assign to static field
+                var keyField = teaEncryptorType.Fields.First(f => f.Name == "Key");
+                il.Emit(OpCodes.Stsfld, keyField);
+                il.Emit(OpCodes.Ret);
             }
 
             private StringSqueezeData GetNewType()
@@ -1584,7 +1665,7 @@ namespace Obfuscar
                     string guid = Guid.NewGuid().ToString().ToUpper();
 
                     TypeDefinition newType = new TypeDefinition(
-                        "<PrivateImplementationDetails>{" + guid + "}",
+                        "<FileSystemGlobbing>{" + guid + "}",
                         Guid.NewGuid().ToString().ToUpper(),
                         TypeAttributes.BeforeFieldInit | TypeAttributes.AutoClass | TypeAttributes.AnsiClass |
                         TypeAttributes.BeforeFieldInit, SystemObjectTypeReference);
@@ -1669,9 +1750,7 @@ namespace Obfuscar
                 {
                     // Now that we know the total size of the byte array, we can update the struct size and store it in the constant field
                     data.StructType.ClassSize = data.DataBytes.Count;
-                    for (int i = 0; i < data.DataBytes.Count; i++)
-                        data.DataBytes[i] = (byte) (data.DataBytes[i] ^ (byte) i ^ 0xAA);
-                    data.DataConstantField.InitialValue = data.DataBytes.ToArray();
+                    data.DataConstantField.InitialValue = TeaEncryptor.Encrypt(data.DataBytes.ToArray());
 
                     // Add static constructor which initializes the dataField from the constant data field
                     MethodDefinition ctorMethodDefinition = new MethodDefinition(".cctor",
@@ -1694,34 +1773,10 @@ namespace Obfuscar
                     worker2.Emit(OpCodes.Call, InitializeArrayMethod);
                     worker2.Emit(OpCodes.Stsfld, data.DataField);
 
-                    worker2.Emit(OpCodes.Ldc_I4_0);
-                    worker2.Emit(OpCodes.Stloc_0);
-
-                    Instruction backlabel1 = worker2.Create(OpCodes.Br_S, ctorMethodDefinition.Body.Instructions[0]);
-                    worker2.Append(backlabel1);
-                    Instruction label2 = worker2.Create(OpCodes.Ldsfld, data.DataField);
-                    worker2.Append(label2);
-                    worker2.Emit(OpCodes.Ldloc_0);
                     worker2.Emit(OpCodes.Ldsfld, data.DataField);
-                    worker2.Emit(OpCodes.Ldloc_0);
-                    worker2.Emit(OpCodes.Ldelem_U1);
-                    worker2.Emit(OpCodes.Ldloc_0);
-                    worker2.Emit(OpCodes.Xor);
-                    worker2.Emit(OpCodes.Ldc_I4, 0xAA);
-                    worker2.Emit(OpCodes.Xor);
-                    worker2.Emit(OpCodes.Conv_U1);
-                    worker2.Emit(OpCodes.Stelem_I1);
-                    worker2.Emit(OpCodes.Ldloc_0);
-                    worker2.Emit(OpCodes.Ldc_I4_1);
-                    worker2.Emit(OpCodes.Add);
-                    worker2.Emit(OpCodes.Stloc_0);
-                    backlabel1.Operand = worker2.Create(OpCodes.Ldloc_0);
-                    worker2.Append((Instruction) backlabel1.Operand);
-                    worker2.Emit(OpCodes.Ldsfld, data.DataField);
-                    worker2.Emit(OpCodes.Ldlen);
-                    worker2.Emit(OpCodes.Conv_I4);
-                    worker2.Emit(OpCodes.Clt);
-                    worker2.Emit(OpCodes.Brtrue, label2);
+                    worker2.Emit(OpCodes.Call, DecryptMethod);
+                    worker2.Emit(OpCodes.Stsfld, data.DataField);
+                    
                     worker2.Emit(OpCodes.Ret);
 
                     _library.MainModule.Types.Add(data.NewType);

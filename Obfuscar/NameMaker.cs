@@ -26,36 +26,40 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 
 namespace Obfuscar
 {
     static class NameMaker
     {
-        static string uniqueChars;
-        static int numUniqueChars;
+        static List<string> genericNames;
+        static List<string> namespaceNames;
+        static List<string> typeNames;
+
+        static int numGenericNames;
+        static int numNamespaceNames;
+        static int numTypeNames;
+
         const string defaultChars = "AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz";
 
-        const string unicodeChars = "\u00A0\u1680" +
-                                    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u200B\u2010\u2011\u2012\u2013\u2014\u2015" +
-                                    "\u2022\u2024\u2025\u2027\u2028\u2029\u202A\u202B\u202C\u202D\u202E\u202F" +
-                                    "\u2032\u2035\u2033\u2036\u203E" +
-                                    "\u2047\u2048\u2049\u204A\u204B\u204C\u204D\u204E\u204F\u2050\u2051\u2052\u2053\u2054\u2055\u2056\u2057\u2058\u2059" +
-                                    "\u205A\u205B\u205C\u205D\u205E\u205F\u2060" +
-                                    "\u2061\u2062\u2063\u2064\u206A\u206B\u206C\u206D\u206E\u206F" +
-                                    "\u3000";
+        const string unicodeChars = /* unicode block */ "\u00A0\u1680" +
+            "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u200B\u2010\u2011\u2012\u2013\u2014\u2015" +
+            "\u2022\u2024\u2025\u2027\u2028\u2029\u202A\u202B\u202C\u202D\u202E\u202F" +
+            "\u2032\u2035\u2033\u2036\u203E" +
+            "\u2047\u2048\u2049\u204A\u204B\u204C\u204D\u204E\u204F\u2050\u2051\u2052\u2053\u2054\u2055\u2056\u2057\u2058\u2059" +
+            "\u205A\u205B\u205C\u205D\u205E\u205F\u2060" +
+            "\u2061\u2062\u2063\u2064\u206A\u206B\u206C\u206D\u206E\u206F\u3000";
 
         private static readonly string koreanChars;
 
         static NameMaker()
         {
-            // Fill the char array used for renaming with characters
-            // from Hangul (Korean) unicode character set.
             var chars = new List<char>(128);
             var rnd = new Random();
             var startPoint = rnd.Next(0xAC00, 0xD5D0);
             for (int i = startPoint; i < startPoint + 128; i++)
-                chars.Add((char) i);
+                chars.Add((char)i);
 
             ShuffleArray(chars, rnd);
             koreanChars = new string(chars.ToArray());
@@ -72,38 +76,39 @@ namespace Obfuscar
             }
         }
 
-        public static string UniqueChars
+        public static string UniqueName(int index, string sep = null)
         {
-            get { return uniqueChars; }            
+            return GenerateName(genericNames, numGenericNames, index, sep);
         }
 
-        public static string KoreanChars
+        public static string UniqueTypeName(int index)
         {
-            get { return koreanChars; }
+            return GenerateName(typeNames ?? genericNames, numTypeNames > 0 ? numTypeNames : numGenericNames, index % (numTypeNames > 0 ? numTypeNames : numGenericNames), ".");
         }
 
-        public static string UniqueName(int index)
+        public static string UniqueNamespace(int index)
         {
-            return UniqueName(index, null);
+            return GenerateName(namespaceNames ?? genericNames, numNamespaceNames > 0 ? numNamespaceNames : numGenericNames, index / (numNamespaceNames > 0 ? numNamespaceNames : numGenericNames), ".");
         }
 
-        public static string UniqueName(int index, string sep)
-        {
-            // optimization for simple case
-            if (index < numUniqueChars)
-                return uniqueChars[index].ToString();
+        public static string UniqueNestedTypeName(int index) => UniqueName(index);
 
-            Stack<char> stack = new Stack<char>();
+        private static string GenerateName(List<string> names, int count, int index, string sep)
+        {
+            if (index < count)
+                return names[index];
+
+            Stack<string> stack = new Stack<string>();
 
             do
             {
-                stack.Push(uniqueChars[index % numUniqueChars]);
-                if (index < numUniqueChars)
+                stack.Push(names[index % count]);
+                if (index < count)
                     break;
-                index /= numUniqueChars;
+                index /= count;
             } while (true);
 
-            StringBuilder builder = new StringBuilder();
+            var builder = new StringBuilder();
             builder.Append(stack.Pop());
             while (stack.Count > 0)
             {
@@ -115,49 +120,78 @@ namespace Obfuscar
             return builder.ToString();
         }
 
-        public static string UniqueNestedTypeName(int index)
+        internal static void DetermineNames(Settings settings)
         {
-            return UniqueName(index, null);
+            genericNames = LoadWordList(settings.WordListFilePath);
+            typeNames = LoadWordList(settings.TypeWordListFilePath);
+            namespaceNames = LoadWordList(settings.NamespaceWordListFilePath);
+
+            numGenericNames = genericNames?.Count ?? 0;
+            numTypeNames = typeNames?.Count ?? 0;
+            numNamespaceNames = namespaceNames?.Count ?? 0;
+
+            // If no wordlists found, fall back to default char logic
+            if (numGenericNames == 0)
+            {
+                string chars;
+                if (!string.IsNullOrWhiteSpace(settings.CustomChars))
+                    chars = settings.CustomChars;
+                else if (settings.UseUnicodeNames)
+                    chars = unicodeChars;
+                else if (settings.UseKoreanNames)
+                    chars = koreanChars;
+                else
+                    chars = defaultChars;
+
+                genericNames = new List<string>();
+                foreach (char c in chars)
+                    genericNames.Add(c.ToString());
+
+                ValidateUnique(genericNames);
+                numGenericNames = genericNames.Count;
+            }
+
+            // fallback if type/namespace names missing
+            if (numTypeNames == 0)
+            {
+                typeNames = genericNames;
+                numTypeNames = numGenericNames;
+            }
+
+            if (numNamespaceNames == 0)
+            {
+                namespaceNames = genericNames;
+                numNamespaceNames = numGenericNames;
+            }
         }
 
-        public static string UniqueTypeName(int index)
+        private static List<string> LoadWordList(string path)
         {
-            return UniqueName(index % numUniqueChars, ".");
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                return null;
+
+            var lines = File.ReadAllLines(path);
+            var words = new List<string>();
+
+            foreach (var line in lines)
+            {
+                var word = line.Trim();
+                if (!string.IsNullOrEmpty(word))
+                    words.Add(word);
+            }
+
+            if (words.Count == 0)
+                return null;
+
+            ValidateUnique(words);
+            return words;
         }
 
-        public static string UniqueNamespace(int index)
+        private static void ValidateUnique(List<string> list)
         {
-            return UniqueName(index / numUniqueChars, ".");
-        }
-
-        internal static void DetermineChars(Settings settings)
-        {
-            if (!string.IsNullOrWhiteSpace(settings.CustomChars))
-            {
-                uniqueChars = settings.CustomChars;
-            }
-            else if (settings.UseUnicodeNames)
-            {
-                uniqueChars = unicodeChars;
-            }
-            else if (settings.UseKoreanNames)
-            {
-                uniqueChars = koreanChars;
-            }
-            else
-            {
-                uniqueChars = defaultChars;
-            }
-
-            numUniqueChars = uniqueChars.Length;
-            string lUnicode = uniqueChars;
-            for (int i = 0; i < lUnicode.Length; i++)
-            {
-                for (int j = i + 1; j < lUnicode.Length; j++)
-                {
-                    System.Diagnostics.Debug.Assert(lUnicode[i] != lUnicode[j], "Duplicate Char");
-                }
-            }
+            var set = new HashSet<string>(list);
+            if (set.Count != list.Count)
+                throw new InvalidOperationException("Duplicate entries found in name list.");
         }
     }
 }
