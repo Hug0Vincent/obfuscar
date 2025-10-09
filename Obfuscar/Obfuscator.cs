@@ -1588,9 +1588,10 @@ namespace Obfuscar
                 InitializeArrayMethod = library.MainModule.ImportReference(
                     runtimeHelpers.Methods.FirstOrDefault(method => method.Name == "InitializeArray"));
 
-                var teaEncryptorType = library.MainModule.ImportReference(typeof(TeaEncryptor)).Resolve();
-                DecryptMethod = library.MainModule.ImportReference(
-                    teaEncryptorType.Methods.FirstOrDefault(method => method.Name == "Decrypt"));
+                // Get a ref on the decrypt method for static constructor
+                var teaEncryptorType = library.MainModule.Types.FirstOrDefault(t => t.FullName == "Obfuscar.TeaEncryptor");
+                var decryptDefinitionMethod = teaEncryptorType.Methods.FirstOrDefault(method => method.Name == "Decrypt");
+                DecryptMethod = library.MainModule.ImportReference(decryptDefinitionMethod);
 
                 GenerateCryptoKey();
             }
@@ -1749,7 +1750,7 @@ namespace Obfuscar
                 foreach (StringSqueezeData data in newDatas)
                 {
                     // Now that we know the total size of the byte array, we can update the struct size and store it in the constant field
-                    data.StructType.ClassSize = data.DataBytes.Count;
+                    data.StructType.ClassSize = TeaEncryptor.GetEncryptedMessageSize(data.DataBytes.Count);
                     data.DataConstantField.InitialValue = TeaEncryptor.Encrypt(data.DataBytes.ToArray());
 
                     // Add static constructor which initializes the dataField from the constant data field
@@ -1766,7 +1767,7 @@ namespace Obfuscar
                     worker2.Emit(OpCodes.Stsfld, data.StringArrayField);
 
 
-                    worker2.Emit(OpCodes.Ldc_I4, data.DataBytes.Count);
+                    worker2.Emit(OpCodes.Ldc_I4, TeaEncryptor.GetEncryptedMessageSize(data.DataBytes.Count));
                     worker2.Emit(OpCodes.Newarr, SystemByteTypeReference);
                     worker2.Emit(OpCodes.Dup);
                     worker2.Emit(OpCodes.Ldtoken, data.DataConstantField);
