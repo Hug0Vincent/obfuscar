@@ -184,6 +184,10 @@ namespace Obfuscar
                 return null;
 
             ValidateUnique(words);
+            
+            var rnd = new Random();
+            ShuffleArray(words, rnd);
+
             return words;
         }
 
