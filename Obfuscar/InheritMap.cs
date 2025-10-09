@@ -28,6 +28,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using Mono.Cecil;
+using System;
 
 namespace Obfuscar
 {
@@ -290,7 +291,7 @@ namespace Obfuscar
 
         public TypeKey[] GetBaseTypes(TypeKey typeKey)
         {
-            return baseTypes[typeKey];
+            return baseTypes.GetValueOrDefault(typeKey, Array.Empty<TypeKey>());
         }
     }
 }

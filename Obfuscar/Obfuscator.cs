@@ -1490,6 +1490,9 @@ namespace Obfuscar
             {
                 MonoCecilExtensions.AddType(info.Definition, teaEncryptorType, false);
                 info.Definition.UpdateFieldsPropertiesAndMethods(false);
+
+                // clear type cache to obfuscate the encryptor
+                info.InvalidateCache();
             }
         }
 
