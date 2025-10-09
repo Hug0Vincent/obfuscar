@@ -20,114 +20,106 @@ namespace Obfuscar
             Key = new uint[] { 0xA56BABCD, 0x0000FFFF, 0xABCDEF01, 0x12345678 }; // Placeholder, will be patched later.
         }
 
-        // Encrypts a 64-bit block (8 bytes)
-        public static byte[] EncryptBlock(byte[] data)
+        /// <summary>
+        /// Encrypts arbitrary data with TEA/XTEA and PKCS7-style padding.
+        /// </summary>
+        public static byte[] Encrypt(byte[] data)
         {
-            if (data.Length != 8) throw new ArgumentException("Block size must be 8 bytes");
+            // Add 4 bytes for length + pad to multiple of 8
+            int totalLength = data.Length + 4;
+            int paddedLength = NextMultipleOf8(totalLength);
 
-            uint v0 = BitConverter.ToUInt32(data, 0);
-            uint v1 = BitConverter.ToUInt32(data, 4);
+            byte[] buffer = new byte[paddedLength];
+
+            // Write original length
+            byte[] lengthBytes = BitConverter.GetBytes(data.Length);
+            Array.Copy(lengthBytes, buffer, 4);
+            Array.Copy(data, 0, buffer, 4, data.Length);
+
+            // Encrypt each 8-byte block
+            for (int i = 0; i < buffer.Length; i += 8)
+            {
+                uint v0 = BitConverter.ToUInt32(buffer, i);
+                uint v1 = BitConverter.ToUInt32(buffer, i + 4);
+                EncryptBlock(v0, v1, out v0, out v1);
+                Array.Copy(BitConverter.GetBytes(v0), 0, buffer, i, 4);
+                Array.Copy(BitConverter.GetBytes(v1), 0, buffer, i + 4, 4);
+            }
+
+            return buffer;
+        }
+
+        /// <summary>
+        /// Decrypts TEA/XTEA data and removes padding.
+        /// </summary>
+        public static byte[] Decrypt(byte[] encryptedData)
+        {
+            if (encryptedData.Length % 8 != 0)
+                throw new ArgumentException("Encrypted data length must be multiple of 8 bytes.");
+
+            byte[] buffer = new byte[encryptedData.Length];
+            Array.Copy(encryptedData, buffer, encryptedData.Length);
+
+            for (int i = 0; i < buffer.Length; i += 8)
+            {
+                uint v0 = BitConverter.ToUInt32(buffer, i);
+                uint v1 = BitConverter.ToUInt32(buffer, i + 4);
+                DecryptBlock(v0, v1, out v0, out v1);
+                Array.Copy(BitConverter.GetBytes(v0), 0, buffer, i, 4);
+                Array.Copy(BitConverter.GetBytes(v1), 0, buffer, i + 4, 4);
+            }
+
+            // Read original length
+            int originalLength = BitConverter.ToInt32(buffer, 0);
+            if (originalLength > buffer.Length - 4)
+                throw new ArgumentException("Invalid encrypted data length.");
+
+            byte[] result = new byte[originalLength];
+            Array.Copy(buffer, 4, result, 0, originalLength);
+            return result;
+        }
+
+        private static int NextMultipleOf8(int length)
+        {
+            return (length + 7) / 8 * 8;
+        }
+
+        public static int GetEncryptedMessageSize(int messageSize)
+        {
+            return NextMultipleOf8(messageSize + 4);
+        }
+
+        #region Block Encryption
+        private static void EncryptBlock(uint v0, uint v1, out uint outV0, out uint outV1)
+        {
             uint sum = 0;
 
-            for (int i = 0; i < Rounds; i++)
+            for (uint i = 0; i < Rounds; i++)
             {
+                v0 += (((v1 << 4) ^ (v1 >> 5)) + v1) ^ (sum + Key[sum & 3]);
                 sum += Delta;
-                v0 += ((v1 << 4) + Key[0]) ^ (v1 + sum) ^ ((v1 >> 5) + Key[1]);
-                v1 += ((v0 << 4) + Key[2]) ^ (v0 + sum) ^ ((v0 >> 5) + Key[3]);
+                v1 += (((v0 << 4) ^ (v0 >> 5)) + v0) ^ (sum + Key[(sum >> 11) & 3]);
             }
 
-            byte[] encrypted = new byte[8];
-            Array.Copy(BitConverter.GetBytes(v0), 0, encrypted, 0, 4);
-            Array.Copy(BitConverter.GetBytes(v1), 0, encrypted, 4, 4);
-            return encrypted;
+            outV0 = v0;
+            outV1 = v1;
         }
 
-        // Decrypts a 64-bit block (8 bytes)
-        public static byte[] DecryptBlock(byte[] data)
+        private static void DecryptBlock(uint v0, uint v1, out uint outV0, out uint outV1)
         {
-            if (data.Length != 8) throw new ArgumentException("Block size must be 8 bytes");
+            uint sum = unchecked(Delta * Rounds);
 
-            uint v0 = BitConverter.ToUInt32(data, 0);
-            uint v1 = BitConverter.ToUInt32(data, 4);
-            uint sum = unchecked(Delta * (uint)Rounds);
-
-            for (int i = 0; i < Rounds; i++)
+            for (uint i = 0; i < Rounds; i++)
             {
-                v1 -= ((v0 << 4) + Key[2]) ^ (v0 + sum) ^ ((v0 >> 5) + Key[3]);
-                v0 -= ((v1 << 4) + Key[0]) ^ (v1 + sum) ^ ((v1 >> 5) + Key[1]);
+                v1 -= (((v0 << 4) ^ (v0 >> 5)) + v0) ^ (sum + Key[(sum >> 11) & 3]);
                 sum -= Delta;
+                v0 -= (((v1 << 4) ^ (v1 >> 5)) + v1) ^ (sum + Key[sum & 3]);
             }
 
-            byte[] decrypted = new byte[8];
-            Array.Copy(BitConverter.GetBytes(v0), 0, decrypted, 0, 4);
-            Array.Copy(BitConverter.GetBytes(v1), 0, decrypted, 4, 4);
-            return decrypted;
+            outV0 = v0;
+            outV1 = v1;
         }
-
-        // Encrypt string using TEA block encryption
-        public static byte[] EncryptString(string input)
-        {
-            byte[] data = PadTo8Bytes(Encoding.UTF8.GetBytes(input));
-            byte[] result = new byte[data.Length];
-
-            for (int i = 0; i < data.Length; i += 8)
-            {
-                byte[] block = new byte[8];
-                Array.Copy(data, i, block, 0, 8);
-                byte[] encrypted = EncryptBlock(block);
-                Array.Copy(encrypted, 0, result, i, 8);
-            }
-
-            return result;
-        }
-
-        public static byte[] Encrypt(byte[] input)
-        {
-            byte[] data = PadTo8Bytes(input);
-            byte[] result = new byte[data.Length];
-
-            for (int i = 0; i < data.Length; i += 8)
-            {
-                byte[] block = new byte[8];
-                Array.Copy(data, i, block, 0, 8);
-                byte[] encrypted = EncryptBlock(block);
-                Array.Copy(encrypted, 0, result, i, 8);
-            }
-
-            return result;
-        }
-
-        public static byte[] Decrypt(byte[] input)
-        {
-            byte[] data = input;
-            byte[] result = new byte[data.Length];
-
-            for (int i = 0; i < data.Length; i += 8)
-            {
-                byte[] block = new byte[8];
-                Array.Copy(data, i, block, 0, 8);
-                byte[] decrypted = DecryptBlock(block);
-                Array.Copy(decrypted, 0, result, i, 8);
-            }
-
-            return TrimPadding(result);
-        }
-
-        public static byte[] PadTo8Bytes(byte[] data)
-        {
-            int padding = 8 - (data.Length % 8);
-            byte[] padded = new byte[data.Length + padding];
-            Array.Copy(data, padded, data.Length);
-            padded[padded.Length - 1] = (byte)padding; // store padding length in last byte
-            return padded;
-        }
-
-        public static byte[] TrimPadding(byte[] data)
-        {
-            int padding = data[data.Length - 1];
-            byte[] result = new byte[data.Length - padding];
-            Array.Copy(data, 0, result, 0, result.Length);
-            return result;
-        }
+        #endregion
     }
 }
+
