@@ -291,7 +291,11 @@ namespace Obfuscar
 
         public TypeKey[] GetBaseTypes(TypeKey typeKey)
         {
-            return baseTypes.GetValueOrDefault(typeKey, Array.Empty<TypeKey>());
+            if (baseTypes.TryGetValue(typeKey, out var result))
+            {
+                return result;
+            }
+            return Array.Empty<TypeKey>(); 
         }
     }
 }

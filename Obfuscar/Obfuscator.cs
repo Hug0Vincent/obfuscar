@@ -115,6 +115,9 @@ namespace Obfuscar
             LoggerService.Logger.LogInformation("Types...");
             RenameTypes();
 
+            LoggerService.Logger.LogInformation("Assembly Metadata...");
+            RenameAssemblyMetadata();
+
             PostProcessing();
 
             LoggerService.Logger.LogInformation("Done.\n");
@@ -652,6 +655,74 @@ namespace Obfuscar
                     Mapping.AddResource(res.Name, ObfuscationStatus.Skipped, "no clear new name");
 
                 info.InvalidateCache();
+            }
+        }
+
+        public void RenameAssemblyMetadata()
+        {
+            // Define the list of attributes we want to hijack
+            var targetAttributes = new List<string>
+            {
+                "System.Reflection.AssemblyTitleAttribute",
+                "System.Reflection.AssemblyDescriptionAttribute",
+                "System.Reflection.AssemblyConfigurationAttribute",
+                "System.Reflection.AssemblyCompanyAttribute",
+                "System.Reflection.AssemblyProductAttribute",
+                "System.Reflection.AssemblyCopyrightAttribute",
+                "System.Reflection.AssemblyTrademarkAttribute",
+                "System.Runtime.InteropServices.GuidAttribute"
+            };
+
+            foreach (AssemblyInfo info in Project.AssemblyList)
+            {
+                var assembly = info.Definition;
+                LoggerService.Logger.LogInformation($"Scrubbing metadata for: {info.Name}");
+
+                foreach (var attrFullName in targetAttributes)
+                {
+                    string newValue;
+
+                    // Handle the GUID separately to ensure it's a valid format
+                    if (attrFullName.Contains("GuidAttribute"))
+                    {
+                        newValue = Guid.NewGuid().ToString();
+                    }
+                    else
+                    {
+                        newValue = NameMaker.UniqueName(_uniqueMemberNameIndex++);
+                    }
+
+                    UpdateAttribute(assembly, attrFullName, newValue);
+                }
+                
+                // Match a common Windows version (e.g., 10.0.19041.1)
+                //assembly.Name.Version = new Version(10, 0, 19041, 1);
+                assembly.Name.Name = NameMaker.UniqueName(_uniqueMemberNameIndex++);
+
+                foreach (var module in assembly.Modules)
+                {
+                    module.Name = NameMaker.UniqueName(_uniqueMemberNameIndex++);
+                }
+            }
+        }
+
+        private void UpdateAttribute(AssemblyDefinition assembly, string attributeFullName, string newValue)
+        {
+            var attribute = assembly.CustomAttributes.FirstOrDefault(a => 
+                a.AttributeType.FullName == attributeFullName);
+
+            if (attribute != null)
+            {
+                // CustomAttributeArgument is the structure for the constructor parameter
+                attribute.ConstructorArguments[0] = new CustomAttributeArgument(
+                    assembly.MainModule.TypeSystem.String, 
+                    newValue);
+                
+                LoggerService.Logger.LogDebug($"Changed {attributeFullName} to: {newValue}");
+            }
+            else 
+            {
+                LoggerService.Logger.LogWarning($"Attribute {attributeFullName} not found in {assembly.Name.Name}");
             }
         }
 
