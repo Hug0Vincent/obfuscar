@@ -10,6 +10,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="AsmResolver" Version="6.0.0-rc.1" />
+    <PackageReference Include="AsmResolver.PE" Version="6.0.0-rc.1" />
+    <PackageReference Include="AsmResolver.PE.File" Version="6.0.0-rc.1" />
+    <PackageReference Include="AsmResolver.PE.Win32Resources" Version="6.0.0-rc.1" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.3" />
     <PackageReference Include="Mono.Cecil" Version="0.11.5" />
     <PackageReference Include="NuGet.Versioning" Version="6.8.0" />

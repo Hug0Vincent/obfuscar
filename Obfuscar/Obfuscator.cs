@@ -43,6 +43,10 @@ using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 using Obfuscar.Helpers;
 using System.Security.Cryptography;
+using AsmResolver.PE;
+using AsmResolver.PE.Builder;
+using AsmResolver.PE.Win32Resources.Version;
+using AsmResolver.IO;
 
 namespace Obfuscar
 {
@@ -124,6 +128,10 @@ namespace Obfuscar
 
             LoggerService.Logger.LogInformation("Saving assemblies...");
             SaveAssemblies();
+
+            LoggerService.Logger.LogInformation("Win32 Resources...");
+            RenameWin32Resources();
+
             LoggerService.Logger.LogInformation("Done.\n");
 
             LoggerService.Logger.LogInformation("Writing log file...");
@@ -676,7 +684,7 @@ namespace Obfuscar
             foreach (AssemblyInfo info in Project.AssemblyList)
             {
                 var assembly = info.Definition;
-                LoggerService.Logger.LogInformation($"Scrubbing metadata for: {info.Name}");
+                LoggerService.Logger.LogDebug($"Scrubbing metadata for: {info.Name}");
 
                 foreach (var attrFullName in targetAttributes)
                 {
@@ -723,6 +731,82 @@ namespace Obfuscar
             else 
             {
                 LoggerService.Logger.LogWarning($"Attribute {attributeFullName} not found in {assembly.Name.Name}");
+            }
+        }
+
+        public void RenameWin32Resources()
+        {
+            string outPath = Project.Settings.OutPath;
+
+            foreach (AssemblyInfo info in Project.AssemblyList)
+            {
+                var fileName = Path.GetFileName(info.FileName);
+                string outName = Path.Combine(outPath, fileName);
+
+                // Load PE
+                var peImage = PEImage.FromFile(outName);
+
+                if (peImage.Resources != null)
+                {
+                    var versionInfo = VersionInfoResource.FromDirectory(peImage.Resources);
+
+                    if (versionInfo != null)
+                    {
+                        var stringFileInfo =
+                            versionInfo.GetChild<StringFileInfo>(StringFileInfo.StringFileInfoKey);
+
+                        if (stringFileInfo != null && stringFileInfo.Tables.Count > 0)
+                        {
+                            var table = stringFileInfo.Tables[0];
+
+                            table[StringTable.ProductNameKey] =
+                                NameMaker.UniqueName(_uniqueMemberNameIndex++);
+
+                            table[StringTable.FileDescriptionKey] =
+                                NameMaker.UniqueName(_uniqueMemberNameIndex++);
+
+                            table[StringTable.CompanyNameKey] =
+                                NameMaker.UniqueName(_uniqueMemberNameIndex++);
+
+                            string fakeBaseName =
+                                NameMaker.UniqueName(_uniqueMemberNameIndex++);
+
+                            table[StringTable.InternalNameKey] = fakeBaseName + ".exe";
+                            table[StringTable.OriginalFilenameKey] = fakeBaseName + ".exe";
+
+                            table[StringTable.LegalCopyrightKey] =
+                                $"Copyright © {DateTime.Now.Year} {NameMaker.UniqueName(_uniqueMemberNameIndex++)}";
+
+                            Random rnd = new Random();
+                            int build = rnd.Next(17763, 22631);
+                            int revision = rnd.Next(1, 3000);
+                            var version = new Version(10, 0, build, revision);
+                            string versionString = version.ToString();
+
+                            versionInfo.FixedVersionInfo.FileVersion = version;
+                            versionInfo.FixedVersionInfo.ProductVersion = version;
+
+                            table[StringTable.FileVersionKey] = versionString;
+                            table[StringTable.ProductVersionKey] = versionString;
+
+
+                        }
+
+                        versionInfo.InsertIntoDirectory(peImage.Resources);
+                    }
+                }
+
+                // Remove debug directory (PDB paths)
+                peImage.DebugData?.Clear();
+
+                var newPeFile = peImage.ToPEFile(new ManagedPEFileBuilder());
+
+                // Write file
+                using var stream = File.Create(outName);
+                newPeFile.Write(new BinaryStreamWriter(stream));
+
+                LoggerService.Logger.LogDebug(
+                    $"Win32 PE headers scrubbed for {fileName}");
             }
         }
 
