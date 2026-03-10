@@ -567,7 +567,7 @@ namespace Obfuscar
                     if (type.FullName == "<Module>")
                         continue;
 
-                    if (type.FullName.IndexOf("<FileSystemGlobbing>{", StringComparison.Ordinal) >= 0)
+                    if (type.FullName.IndexOf("<HuffmanDecoding>{", StringComparison.Ordinal) >= 0)
                         continue;
 
                     TypeKey oldTypeKey = new TypeKey(type);
@@ -1824,7 +1824,7 @@ namespace Obfuscar
                     string guid = Guid.NewGuid().ToString().ToUpper();
 
                     TypeDefinition newType = new TypeDefinition(
-                        "<FileSystemGlobbing>{" + guid + "}",
+                        "<HuffmanDecoding>{" + guid + "}",
                         Guid.NewGuid().ToString().ToUpper(),
                         TypeAttributes.BeforeFieldInit | TypeAttributes.AutoClass | TypeAttributes.AnsiClass |
                         TypeAttributes.BeforeFieldInit, SystemObjectTypeReference);
