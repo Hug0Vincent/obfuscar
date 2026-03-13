@@ -709,6 +709,7 @@ namespace Obfuscar
 
                 foreach (var module in assembly.Modules)
                 {
+                    module.Mvid = Guid.NewGuid();
                     module.Name = NameMaker.UniqueName(_uniqueMemberNameIndex++);
                 }
             }
